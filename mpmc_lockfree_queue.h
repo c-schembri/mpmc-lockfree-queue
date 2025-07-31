@@ -74,21 +74,21 @@ typedef signed long long __mpmc_int64;
     #define MPMC_LOCKFREE_ATOMIC __mpmc_int64
     #define MPMC_LOCKFREE_CACHE_ALIGNED __attribute__((aligned(MPMC_LOCKFREE_CACHE_LINE)))
 
-  #if defined(__clang__)
-    #if __clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 3)
-      #define HAS_ATOMIC_BUILTINS 1
+    #if defined(__clang__)
+      #if __clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 3)
+        #define HAS_ATOMIC_BUILTINS 1
+      #else
+        #define HAS_ATOMIC_BUILTINS 0
+      #endif
+    #elif defined(__GNUC__)
+      #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)
+        #define HAS_ATOMIC_BUILTINS 1
+      #else
+        #define HAS_ATOMIC_BUILTINS 0
+      #endif
     #else
       #define HAS_ATOMIC_BUILTINS 0
-    #endif
-  #elif defined(__GNUC__)
-    #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)
-      #define HAS_ATOMIC_BUILTINS 1
-    #else
-      #define HAS_ATOMIC_BUILTINS 0
-    #endif
-  #else
-    #define HAS_ATOMIC_BUILTINS 0
-  #endif // defined(__clang__)
+    #endif // defined(__clang__)
 
     #if HAS_ATOMIC_BUILTINS
       // use __atomic* api
