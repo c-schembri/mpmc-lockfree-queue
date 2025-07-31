@@ -7,13 +7,10 @@
 // - acquire load ensures reader sees slot->turn and slot->data updated
 // - release store ensures writer publishes data before updating turn
 
-#define MPMC_USE_C11_ATOMICS false
-// on msvc, you need to compile with /std:c11 /experimental:c11atomics
-
 #define MPMC_LOCKFREE_INTERNAL static inline
 #define MPMC_LOCKFREE_API      static inline
 
-typedef signed long long int64;
+typedef signed long long __mpmc_int64;
 
 #if MPMC_USE_C11_ATOMICS
   // use c11 atomic* api
@@ -22,7 +19,7 @@ typedef signed long long int64;
   #include <stdalign.h>
 
   #define MPMC_LOCKFREE_CACHE_ALIGNED alignas(MPMC_LOCKFREE_CACHE_LINE)
-  #define MPMC_LOCKFREE_ATOMIC _Atomic int64
+  #define MPMC_LOCKFREE_ATOMIC _Atomic __mpmc_int64
 
   #define ATOMIC_FETCH_ADD(Ptr, Val, MemoryOrder) atomic_fetch_add_explicit((Ptr), (Val), (MemoryOrder))
   #define ATOMIC_LOAD(Ptr, MemoryOrder)           atomic_load_explicit((Ptr), (MemoryOrder))
@@ -45,7 +42,7 @@ typedef signed long long int64;
 
     #include <windows.h>
 
-    #define MPMC_LOCKFREE_ATOMIC volatile signed long long
+    #define MPMC_LOCKFREE_ATOMIC volatile __mpmc_int64
     #define MPMC_LOCKFREE_CACHE_ALIGNED __declspec(align(MPMC_LOCKFREE_CACHE_LINE))
 
     #define ATOMIC_FETCH_ADD(Ptr, Val, MemoryOrder) InterlockedExchangeAdd64((Ptr), (Val))
@@ -53,8 +50,8 @@ typedef signed long long int64;
     #define ATOMIC_STORE(Ptr, Val, MemoryOrder)     InterlockedExchange64((LONGLONG volatile *)(Ptr), (Val))
 
     MPMC_LOCKFREE_INTERNAL int
-    __mpmc_interlocked_compare_exchange64(int64 volatile *ptr, int64 *expected, int64 desired) {
-      int64 old = InterlockedCompareExchange64(ptr, desired, *expected);
+    __mpmc_interlocked_compare_exchange64(__mpmc_int64 volatile *ptr, __mpmc_int64 *expected, __mpmc_int64 desired) {
+      __mpmc_int64 old = InterlockedCompareExchange64(ptr, desired, *expected);
       if (old == *expected) {
         return 1;
       } else {
@@ -64,7 +61,7 @@ typedef signed long long int64;
     }
 
     #define ATOMIC_COMPARE_EXCHANGE_STRONG(Ptr, Expected, Desired, Success, Failure) \
-      __mpmc_interlocked_compare_exchange64((int64 volatile *)(Ptr), (Expected), (Desired))
+      __mpmc_interlocked_compare_exchange64((__mpmc_int64 volatile *)(Ptr), (Expected), (Desired))
 
     #define MPMC_LOCKFREE_MO_RELAXED 
     #define MPMC_LOCKFREE_MO_CONSUME 
@@ -73,24 +70,27 @@ typedef signed long long int64;
     #define MPMC_LOCKFREE_MO_ACQ_REL 
     #define MPMC_LOCKFREE_MO_SEQ_CST 
 
-
   #elif defined(__clang__) || defined(__GNUC__)
-    #define MPMC_LOCKFREE_ATOMIC int64
+    #define MPMC_LOCKFREE_ATOMIC __mpmc_int64
     #define MPMC_LOCKFREE_CACHE_ALIGNED __attribute__((aligned(MPMC_LOCKFREE_CACHE_LINE)))
 
-    #if defined(__has_builtin)
-      #define HAS_BUILTIN(x) __has_builtin(x)
+  #if defined(__clang__)
+    #if __clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 3)
+      #define HAS_ATOMIC_BUILTINS 1
     #else
-      #define HAS_BUILTIN(x) 0
+      #define HAS_ATOMIC_BUILTINS 0
     #endif
-
-    #if HAS_BUILTIN(__atomic_load_n) || (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7))
-      #define USE_GNU_ATOMIC 1
+  #elif defined(__GNUC__)
+    #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)
+      #define HAS_ATOMIC_BUILTINS 1
     #else
-      #define USE_GNU_ATOMIC 0
+      #define HAS_ATOMIC_BUILTINS 0
     #endif
+  #else
+    #define HAS_ATOMIC_BUILTINS 0
+  #endif // defined(__clang__)
 
-    #if USE_GNU_ATOMIC
+    #if HAS_ATOMIC_BUILTINS
       // use __atomic* api
 
       #define MPMC_LOCKFREE_MO_RELAXED __ATOMIC_RELAXED
@@ -104,12 +104,12 @@ typedef signed long long int64;
       #define ATOMIC_LOAD(Ptr, MemoryOrder)           __atomic_load_n((Ptr), (MemoryOrder))
       #define ATOMIC_STORE(Ptr, Val, MemoryOrder)     __atomic_store_n((Ptr), (Val), (MemoryOrder))
       #define ATOMIC_COMPARE_EXCHANGE_STRONG(Ptr, Expected, Desired, Success, Failure) \
-      __atomic_compare_exchange_n( \
-        (Ptr), (Expected), (Desired), \
-        0, /* strong CAS */ \
-        (Success), \
-        (Failure) \
-      )
+        __atomic_compare_exchange_n( \
+          (Ptr), (Expected), (Desired), \
+          0, /* strong CAS */ \
+          (Success), \
+          (Failure) \
+        )
     #else
       // use __sync* api
 
@@ -122,7 +122,7 @@ typedef signed long long int64;
       } while (0)
       #define ATOMIC_COMPARE_EXCHANGE_STRONG(Ptr, Expected, Desired, Success, Failure) \
         ({ \
-          int64 _old = __sync_val_compare_and_swap((Ptr), *(Expected), (Desired)); \
+          __mpmc_int64 _old = __sync_val_compare_and_swap((Ptr), *(Expected), (Desired)); \
           if (_old == *(Expected)) { \
             1; \
           } else { \
@@ -138,11 +138,11 @@ typedef signed long long int64;
       #define MPMC_LOCKFREE_MO_ACQ_REL 
       #define MPMC_LOCKFREE_MO_SEQ_CST 
 
-    #endif
+    #endif // HAS_ATOMIC_BUILTINS
   #else
     #error "Unsupported C compiler"
-  #endif
-#endif
+  #endif // defined(__clang__) || defined(__GNUC__)
+#endif // MPMC_USE_C11_ATOMICS
 
 #define MPMC_LOCKFREE_CACHE_LINE  64
 #define MPMC_LOCKFREE_SLOTS_COUNT 12
@@ -163,7 +163,7 @@ struct mpmc_lockfree_queue_t {
 
 MPMC_LOCKFREE_API void 
 mpmc_lockfree_enqueue(mpmc_lockfree_queue_t *queue, void *item) {
-  int64 head = ATOMIC_FETCH_ADD(&queue->head, 1, MPMC_LOCKFREE_MO_ACQ_REL);
+  __mpmc_int64 head = ATOMIC_FETCH_ADD(&queue->head, 1, MPMC_LOCKFREE_MO_ACQ_REL);
   mpmc_lockfree_slot_t *slot = &queue->slots[head % MPMC_LOCKFREE_SLOTS_COUNT];
   while ((head / MPMC_LOCKFREE_SLOTS_COUNT) * 2 != ATOMIC_LOAD(&slot->turn, MPMC_LOCKFREE_MO_ACQUIRE)) {
     // Busy loop.
@@ -174,7 +174,7 @@ mpmc_lockfree_enqueue(mpmc_lockfree_queue_t *queue, void *item) {
 
 MPMC_LOCKFREE_API void
 mpmc_lockfree_dequeue(mpmc_lockfree_queue_t *queue, void *item) {
-  int64 tail = ATOMIC_FETCH_ADD(&queue->tail, 1, MPMC_LOCKFREE_MO_ACQ_REL);
+  __mpmc_int64 tail = ATOMIC_FETCH_ADD(&queue->tail, 1, MPMC_LOCKFREE_MO_ACQ_REL);
   mpmc_lockfree_slot_t *slot = &queue->slots[tail % MPMC_LOCKFREE_SLOTS_COUNT];
   while ((tail / MPMC_LOCKFREE_SLOTS_COUNT) * 2 + 1 != ATOMIC_LOAD(&slot->turn, MPMC_LOCKFREE_MO_ACQUIRE)) { 
     // Busy loop.
@@ -185,13 +185,13 @@ mpmc_lockfree_dequeue(mpmc_lockfree_queue_t *queue, void *item) {
 
 MPMC_LOCKFREE_API int 
 mpmc_lockfree_try_enqueue(mpmc_lockfree_queue_t *queue, void *item) {
-  int64 head = ATOMIC_LOAD(&queue->head, MPMC_LOCKFREE_MO_ACQUIRE);
+  __mpmc_int64 head = ATOMIC_LOAD(&queue->head, MPMC_LOCKFREE_MO_ACQUIRE);
   while (1) {
     mpmc_lockfree_slot_t *slot = &queue->slots[head % MPMC_LOCKFREE_SLOTS_COUNT];
-    int64 cycle = (head / MPMC_LOCKFREE_SLOTS_COUNT) * 2;
+    __mpmc_int64 cycle = (head / MPMC_LOCKFREE_SLOTS_COUNT) * 2;
     if (cycle == ATOMIC_LOAD(&slot->turn, MPMC_LOCKFREE_MO_ACQUIRE)) {
-      int64 desired = head + 1;
-      int64 expected = head;
+      __mpmc_int64 desired = head + 1;
+      __mpmc_int64 expected = head;
       if (ATOMIC_COMPARE_EXCHANGE_STRONG(&queue->head, &expected, desired, MPMC_LOCKFREE_MO_ACQ_REL, MPMC_LOCKFREE_MO_ACQUIRE)) {
         memcpy(slot->data, item, MPMC_LOCKFREE_SLOT);
         ATOMIC_STORE(&slot->turn, cycle + 1, MPMC_LOCKFREE_MO_RELEASE);
@@ -200,7 +200,7 @@ mpmc_lockfree_try_enqueue(mpmc_lockfree_queue_t *queue, void *item) {
       head = expected;
       continue;
     }
-    int64 prev_head = head;
+    __mpmc_int64 prev_head = head;
     head = ATOMIC_LOAD(&queue->head, MPMC_LOCKFREE_MO_ACQUIRE);
     if (head == prev_head) {
       return 0;
@@ -210,12 +210,12 @@ mpmc_lockfree_try_enqueue(mpmc_lockfree_queue_t *queue, void *item) {
 
 MPMC_LOCKFREE_API int
 mpmc_lockfree_try_dequeue(mpmc_lockfree_queue_t *queue, void *item) {
-  int64 tail = ATOMIC_LOAD(&queue->tail, MPMC_LOCKFREE_MO_ACQUIRE);
+  __mpmc_int64 tail = ATOMIC_LOAD(&queue->tail, MPMC_LOCKFREE_MO_ACQUIRE);
   while (1) {
     mpmc_lockfree_slot_t *slot = &queue->slots[tail % MPMC_LOCKFREE_SLOTS_COUNT];
     if ((tail / MPMC_LOCKFREE_SLOTS_COUNT) * 2 + 1 == ATOMIC_LOAD(&slot->turn, MPMC_LOCKFREE_MO_ACQUIRE)) {
-      int64 desired = tail + 1;
-      int64 expected = tail;
+      __mpmc_int64 desired = tail + 1;
+      __mpmc_int64 expected = tail;
       if (ATOMIC_COMPARE_EXCHANGE_STRONG(&queue->tail, &expected, desired, MPMC_LOCKFREE_MO_ACQ_REL, MPMC_LOCKFREE_MO_ACQUIRE)) {
         memcpy(item, slot->data, MPMC_LOCKFREE_SLOT);
         ATOMIC_STORE(&slot->turn, (tail / MPMC_LOCKFREE_SLOTS_COUNT) * 2 + 2, MPMC_LOCKFREE_MO_RELEASE);
@@ -224,7 +224,7 @@ mpmc_lockfree_try_dequeue(mpmc_lockfree_queue_t *queue, void *item) {
         tail = expected;
       }
     } else {
-      int64 prev_tail = tail;
+      __mpmc_int64 prev_tail = tail;
       tail = ATOMIC_LOAD(&queue->tail, MPMC_LOCKFREE_MO_ACQUIRE);
       if (tail == prev_tail) {
         return 0;
